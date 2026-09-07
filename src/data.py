@@ -8,7 +8,7 @@ ATTRIBUTES = [
     'MEANALP', 'TOTFX'
 ]
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "Preprocessed_SWANSF"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "Cleaned SWANSF Dataset"
 
 
 def load_partitions(data_dir: Path = DATA_DIR, split: str = "train", num_partitions: int = 5):
