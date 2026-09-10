@@ -29,6 +29,12 @@ PATIENCE = 8
 LR = 1e-3
 WEIGHT_DECAY = 1e-4
 
+# Train partitions are RUS-Tomek-TimeGAN resampled to ~1:1, but the real test
+# distribution is ~52:1 (natural). Undersampling positives down to this ratio
+# moves training closer to the real distribution without discarding almost
+# all positive examples (52:1 would need dropping ~98% of them).
+UNDERSAMPLE_NEG_POS_RATIO = 10.0
+
 # Below this much *available* RAM, refuse to start the next heavy step rather
 # than risk exhausting memory and crashing the whole machine (this has
 # actually rebooted an 8GB M1 before -- do not remove this guard).
@@ -98,6 +104,19 @@ def load_train_full():
     del X_list, y_list
     gc.collect()
     return X, y
+
+
+def undersample_to_ratio(X: np.ndarray, y: np.ndarray, neg_pos_ratio: float, seed: int = RANDOM_STATE):
+    """Keep all negatives, randomly subsample positives so neg:pos matches
+    neg_pos_ratio. Approximates the natural class balance without discarding
+    almost every positive example the way matching the true ~52:1 ratio would."""
+    rng = np.random.default_rng(seed)
+    pos_idx = np.flatnonzero(y == 1)
+    neg_idx = np.flatnonzero(y == 0)
+    n_pos_keep = max(1, int(round(len(neg_idx) / neg_pos_ratio)))
+    pos_idx = rng.choice(pos_idx, size=min(n_pos_keep, len(pos_idx)), replace=False)
+    keep = np.sort(np.concatenate([neg_idx, pos_idx]))
+    return X[keep], y[keep]
 
 
 def load_val_partition():
@@ -181,7 +200,12 @@ def best_threshold_by_tss(y_true: np.ndarray, y_proba: np.ndarray) -> float:
 def train_one_fold(model_name, X_train, y_train, X_val, y_val, n_attrs, device):
     model = build_model(model_name, n_attrs).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    criterion = torch.nn.BCEWithLogitsLoss()
+
+    n_pos = float(y_train.sum())
+    n_neg = float(len(y_train) - n_pos)
+    pos_weight = torch.tensor([n_neg / n_pos], device=device)
+    print(f"  pos_weight = {pos_weight.item():.4f} (train: {int(n_pos)} pos / {int(n_neg)} neg)")
+    criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     train_loader = make_loader(X_train, y_train, BATCH_SIZE, shuffle=True)
     val_loader = make_loader(X_val, y_val, BATCH_SIZE, shuffle=False)
@@ -229,7 +253,9 @@ def main():
     print("Loading raw train partitions...")
     X_tr, y_tr = load_train_full()
     n_attrs = X_tr.shape[-1]
-    print(f"Train shape: {X_tr.shape}")
+    print(f"Train shape (before undersampling): {X_tr.shape}")
+    X_tr, y_tr = undersample_to_ratio(X_tr, y_tr, UNDERSAMPLE_NEG_POS_RATIO)
+    print(f"Train shape (after undersampling to ~{UNDERSAMPLE_NEG_POS_RATIO:.0f}:1 neg:pos): {X_tr.shape}")
     check_memory("after train load")
 
     # Validate on a natural-distribution test partition rather than a
