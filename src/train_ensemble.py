@@ -17,10 +17,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import joblib
 import numpy as np
 import torch
 from scipy.stats import loguniform, randint
 from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.inspection import permutation_importance
 from sklearn.metrics import make_scorer
 from sklearn.model_selection import GroupKFold, RandomizedSearchCV
 
@@ -29,6 +31,7 @@ from features import aggregate_timeseries
 from metrics import heidke_skill_score, true_skill_statistic
 from train_deep import (
     N_PARTITIONS,
+    UNDERSAMPLE_NEG_POS_RATIO,
     check_memory,
     evaluate,
     iter_partitions_float32,
@@ -37,10 +40,12 @@ from train_deep import (
     make_loader,
     set_seed,
     train_one_fold,
+    undersample_to_ratio,
 )
 
 GBM_N_ITER = 40
 GBM_RANDOM_STATE = 42
+MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
 GBM_PARAM_DISTRIBUTIONS = {
     "learning_rate": loguniform(1e-2, 3e-1),
     "max_leaf_nodes": randint(15, 128),
@@ -56,8 +61,9 @@ def train_gbm():
     print("Loading and featurizing train partitions (with CV groups) for GBM...")
     X_parts, y_parts = load_partitions(split="train", num_partitions=N_PARTITIONS)
     X_feats, ys, groups = [], [], []
+    columns = None
     for i, (X_raw, y) in enumerate(zip(X_parts, y_parts)):
-        X_feat, _ = aggregate_timeseries(X_raw)
+        X_feat, columns = aggregate_timeseries(X_raw)
         X_feats.append(X_feat)
         ys.append(y)
         groups.append(np.full(len(y), i))
@@ -77,7 +83,7 @@ def train_gbm():
         n_iter=GBM_N_ITER,
         scoring=tss_scorer,
         cv=cv,
-        n_jobs=3,
+        n_jobs=2,
         random_state=GBM_RANDOM_STATE,
         verbose=1,
         refit=True,
@@ -85,9 +91,16 @@ def train_gbm():
     search.fit(X_train, y_train, groups=groups)
     print(f"Best GBM CV TSS: {search.best_score_:.4f}")
     print(f"Best GBM params: {search.best_params_}")
+    best_model = search.best_estimator_
+
+    MODEL_DIR.mkdir(exist_ok=True)
+    model_path = MODEL_DIR / "gbm_tuned.pkl"
+    joblib.dump({"model": best_model, "columns": columns}, model_path)
+    print(f"Saved GBM model to {model_path}")
+
     del X_train, y_train, groups
     gc.collect()
-    return search.best_estimator_
+    return best_model, columns
 
 
 @torch.no_grad()
@@ -115,13 +128,14 @@ def main():
     check_memory("start")
 
     print("\n=== Training GBM ===")
-    gbm_model = train_gbm()
+    gbm_model, gbm_columns = train_gbm()
     check_memory("after GBM training")
 
     print("\n=== Training CNN ===")
     X_tr, y_tr = load_train_full()
     n_attrs = X_tr.shape[-1]
-    print(f"CNN train shape: {X_tr.shape}")
+    X_tr, y_tr = undersample_to_ratio(X_tr, y_tr, UNDERSAMPLE_NEG_POS_RATIO)
+    print(f"CNN train shape (after undersampling to ~{UNDERSAMPLE_NEG_POS_RATIO:.0f}:1 neg:pos): {X_tr.shape}")
     check_memory("after CNN train load")
 
     X_val, y_val = load_val_partition()
@@ -133,14 +147,27 @@ def main():
     gc.collect()
     check_memory("before threshold selection")
 
-    # Pick the ensemble threshold on the same validation partition used for
-    # CNN early stopping, so nothing here has seen the final test partitions.
+    # Pick thresholds on the same validation partition used for CNN early
+    # stopping, so nothing here has seen the final test partitions.
     X_val_feat, _ = aggregate_timeseries(X_val)
+
+    print("\n=== GBM feature importances (permutation, on val partition) ===")
+    perm = permutation_importance(
+        gbm_model, X_val_feat, y_val, n_repeats=5, random_state=GBM_RANDOM_STATE,
+        scoring=make_scorer(true_skill_statistic), n_jobs=2,
+    )
+    order = np.argsort(perm.importances_mean)[::-1][:15]
+    for idx in order:
+        print(f"  {gbm_columns[idx]:20s} {perm.importances_mean[idx]:.4f} +/- {perm.importances_std[idx]:.4f}")
+
     gbm_val_proba = gbm_model.predict_proba(X_val_feat)[:, 1]
     cnn_val_proba = cnn_proba(cnn_model, X_val, y_val, device)
     ensemble_val_proba = (gbm_val_proba + cnn_val_proba) / 2
+
+    gbm_threshold = best_threshold_by_tss(y_val, gbm_val_proba)
     threshold = best_threshold_by_tss(y_val, ensemble_val_proba)
-    print(f"\nEnsemble TSS-optimal threshold (chosen on val partition): {threshold:.2f}")
+    print(f"\nGBM TSS-optimal threshold (chosen on val partition): {gbm_threshold:.2f}")
+    print(f"Ensemble TSS-optimal threshold (chosen on val partition): {threshold:.2f}")
     del X_val, X_val_feat, gbm_val_proba, cnn_val_proba, ensemble_val_proba
     gc.collect()
 
@@ -159,6 +186,11 @@ def main():
     ensemble_probs = (gbm_probs + cnn_probs) / 2
 
     evaluate("GBM alone (threshold=0.5)", y_test, (gbm_probs >= 0.5).astype(int))
+    evaluate(
+        f"GBM alone (threshold={gbm_threshold:.2f})",
+        y_test,
+        (gbm_probs >= gbm_threshold).astype(int),
+    )
     evaluate("CNN alone (threshold=0.5)", y_test, (cnn_probs >= 0.5).astype(int))
     evaluate("Ensemble (threshold=0.5)", y_test, (ensemble_probs >= 0.5).astype(int))
     evaluate(
