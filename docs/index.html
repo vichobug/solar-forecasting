@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flare Watch — Solar Flare Forecasting</title>
+<meta name="description" content="Predicting M/X-class solar flares from SWAN-SF magnetogram time series — the debugging journey from a leaky validation score to a model that beats a published benchmark.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0B0E14;
+    --panel: #121826;
+    --panel-2: #1A2236;
+    --ink: #EDF1F7;
+    --ink-soft: #C3CBDA;
+    --ink-muted: #8B96AC;
+    --ink-faint: #5B6579;
+    --flare: #E8672E;
+    --flare-dim: #B04B1F;
+    --blue: #3987E5;
+    --blue-dim: #24507F;
+    --border: rgba(255,255,255,0.09);
+    --border-soft: rgba(255,255,255,0.05);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    padding-inline: 24px;
+    padding-block: 56px 40px;
+    line-height: 1.55;
+  }
+
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+
+  .display { font-family: 'Instrument Serif', Georgia, serif; }
+  .mono { font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', monospace; }
+
+  main {
+    max-width: 880px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 88px;
+  }
+
+  /* ---------- shared bits ---------- */
+
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--flare);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--flare);
+    box-shadow: 0 0 0 3px rgba(232,103,46,0.18);
+  }
+
+  h1, h2, h3 { margin: 0; text-wrap: balance; }
+
+  p { margin: 0; color: var(--ink-soft); }
+
+  a { color: var(--flare); }
+
+  .panel {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    padding: 28px;
+    overflow-x: auto;
+  }
+
+  @media (max-width: 560px) {
+    .panel { padding: 20px; }
+    body { padding-inline: 16px; }
+  }
+
+  /* ---------- hero ---------- */
+
+  .hero { display: flex; flex-direction: column; gap: 22px; }
+
+  .hero h1 {
+    font-size: clamp(42px, 8vw, 68px);
+    font-weight: 400;
+    font-style: italic;
+    line-height: 1.02;
+  }
+
+  .hero-lede {
+    max-width: 62ch;
+    font-size: 17px;
+    color: var(--ink-soft);
+  }
+  .hero-lede .subj { color: var(--ink); font-style: italic; font-family: 'Instrument Serif', serif; font-size: 1.08em; }
+
+  .readout {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+  }
+  .readout-cell {
+    background: var(--panel);
+    padding: 18px 26px;
+    flex: 1 1 160px;
+    min-width: 160px;
+  }
+  .readout-cell.hi { background: linear-gradient(180deg, rgba(232,103,46,0.14), rgba(232,103,46,0.03)); }
+  .readout-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+  }
+  .readout-value {
+    font-family: 'Instrument Serif', serif;
+    font-size: 40px;
+    line-height: 1.1;
+    margin-top: 6px;
+    color: var(--ink);
+  }
+  .readout-cell.hi .readout-value { color: var(--flare); }
+  .readout-sub { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-faint); margin-top: 4px; }
+
+  /* ---------- section heads ---------- */
+
+  .section-head { display: flex; flex-direction: column; gap: 10px; margin-bottom: 26px; }
+  .section-head h2 {
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: 32px;
+    color: var(--ink);
+  }
+  .section-head p { max-width: 64ch; font-size: 15px; }
+
+  /* ---------- primer ---------- */
+
+  .primer-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+  }
+  .primer-cell { background: var(--panel); padding: 20px 22px; display: flex; flex-direction: column; gap: 8px; }
+  .primer-cell .num { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--flare); }
+  .primer-cell h3 { font-size: 15px; font-weight: 600; color: var(--ink); }
+  .primer-cell p { font-size: 13.5px; }
+  @media (max-width: 640px) { .primer-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- mission log ---------- */
+
+  .log { display: flex; flex-direction: column; }
+  .log-entry {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    gap: 24px;
+    padding-block: 22px;
+    border-top: 1px solid var(--border-soft);
+    position: relative;
+  }
+  .log-entry:last-child { border-bottom: 1px solid var(--border-soft); }
+  .log-tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-faint);
+    padding-top: 3px;
+  }
+  .log-tag .n { color: var(--flare); display: block; font-size: 15px; margin-bottom: 3px; }
+  .log-body h3 { font-size: 16.5px; font-weight: 600; color: var(--ink); margin-bottom: 7px; }
+  .log-body p { font-size: 14.5px; }
+  .log-metric {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    margin-top: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-muted);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    padding: 5px 10px;
+  }
+  .log-metric b { color: var(--flare); font-size: 13px; font-weight: 500; }
+  .log-metric .arrow { color: var(--ink-faint); }
+  @media (max-width: 560px) {
+    .log-entry { grid-template-columns: 1fr; gap: 6px; }
+  }
+
+  /* ---------- charts ---------- */
+
+  .chart-grid {
+    position: relative;
+    display: grid;
+    grid-template-columns: 172px 1fr;
+    row-gap: 16px;
+    column-gap: 14px;
+    padding-top: 34px;
+    min-width: 480px;
+  }
+  .bar-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-muted);
+    display: flex;
+    align-items: center;
+  }
+  .bar-label .fam {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 8px;
+    flex: none;
+  }
+  .bar-track {
+    position: relative;
+    height: 26px;
+    display: flex;
+    align-items: center;
+  }
+  .bar-fill {
+    height: 100%;
+    background: var(--blue-dim);
+    border-right: 2px solid var(--blue);
+    position: relative;
+    transition: filter 0.15s ease;
+  }
+  .bar-fill.win {
+    background: var(--flare-dim);
+    border-right: 2px solid var(--flare);
+  }
+  .bar-track:hover .bar-fill { filter: brightness(1.3); }
+  .bar-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink);
+    margin-left: 10px;
+    white-space: nowrap;
+  }
+  .bar-value.win { color: var(--flare); font-weight: 500; }
+
+  .bar-tip {
+    position: absolute;
+    bottom: 130%;
+    left: 0;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-soft);
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(4px);
+    transition: opacity 0.12s ease, transform 0.12s ease;
+    z-index: 3;
+  }
+  .bar-track:hover .bar-tip { opacity: 1; transform: translateY(0); }
+  .bar-tip b { color: var(--ink); }
+
+  .ref-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px dashed var(--ink-faint);
+    width: 0;
+  }
+  .ref-line .ref-label {
+    position: absolute;
+    top: -30px;
+    left: 4px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-faint);
+    white-space: nowrap;
+    line-height: 1.3;
+  }
+
+  .legend { display: flex; gap: 22px; margin-top: 26px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--ink-muted); }
+  .legend-swatch { width: 10px; height: 10px; flex: none; }
+
+  .chart-note { margin-top: 22px; font-size: 13px; color: var(--ink-muted); border-top: 1px solid var(--border-soft); padding-top: 16px; }
+
+  /* ---------- feature importance ---------- */
+
+  .fi-grid { display: grid; grid-template-columns: 130px 1fr; row-gap: 13px; column-gap: 14px; min-width: 420px; }
+  .fi-bar-track { position: relative; height: 20px; display: flex; align-items: center; }
+  .fi-bar-fill { height: 100%; background: var(--blue-dim); border-right: 2px solid var(--blue); }
+  .fi-bar-fill.top { background: var(--flare-dim); border-right: 2px solid var(--flare); }
+  .fi-bar-track:hover .fi-bar-fill { filter: brightness(1.3); }
+  .fi-value { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--ink-muted); margin-left: 9px; }
+  .fi-value.top { color: var(--flare); font-weight: 500; }
+  .fi-label { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-muted); display: flex; align-items: center; }
+  .fi-label.top { color: var(--ink); }
+
+  /* ---------- field notes ---------- */
+
+  .notes-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); }
+  .note { background: var(--panel); padding: 24px; display: flex; flex-direction: column; gap: 10px; }
+  .note .tag { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--blue); }
+  .note h3 { font-size: 15px; font-weight: 600; }
+  .note p { font-size: 13.5px; }
+  @media (max-width: 640px) { .notes-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- footer ---------- */
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding-top: 28px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 20px;
+  }
+  .stack { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    color: var(--ink-muted);
+    border: 1px solid var(--border);
+    padding: 5px 10px;
+  }
+  footer .credit { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-faint); text-align: right; }
+  footer .credit a { color: var(--ink-muted); text-decoration: underline; text-underline-offset: 3px; }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="eyebrow">SWAN-SF &middot; Binary large-flare forecasting</div>
+    <h1 class="display">Flare Watch</h1>
+    <p class="hero-lede">
+      A from-scratch attempt to predict whether an active region on the
+      <span class="subj">sun's surface</span> will produce a damaging M- or
+      X-class flare in the next window, from twelve hours of magnetic-field
+      telemetry alone. Six model iterations, two silent bugs, one machine
+      that rebooted itself, and a final model that beats a 2024 contrastive-
+      learning benchmark using nothing but a tuned decision-tree ensemble.
+    </p>
+    <div class="readout">
+      <div class="readout-cell hi">
+        <div class="readout-label">Best TSS</div>
+        <div class="readout-value">0.839</div>
+        <div class="readout-sub">true skill statistic &middot; test set</div>
+      </div>
+      <div class="readout-cell">
+        <div class="readout-label">Best HSS</div>
+        <div class="readout-value">0.216</div>
+        <div class="readout-sub">heidke skill score</div>
+      </div>
+      <div class="readout-cell">
+        <div class="readout-label">vs. published</div>
+        <div class="readout-value">+0.13</div>
+        <div class="readout-sub">over CONTREX (2024), 0.71 TSS</div>
+      </div>
+      <div class="readout-cell">
+        <div class="readout-label">Winning model</div>
+        <div class="readout-value" style="font-size:26px; padding-top:10px;">Gradient-<br>boosted trees</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRIMER -->
+  <section>
+    <div class="section-head">
+      <div class="eyebrow">Field primer</div>
+      <h2>Reading a magnetogram for trouble</h2>
+      <p>Three things worth knowing before the log below makes sense.</p>
+    </div>
+    <div class="primer-grid">
+      <div class="primer-cell">
+        <span class="num">01</span>
+        <h3>The signal</h3>
+        <p>Each sample is 60 timesteps (~12 hours at 12-minute cadence) of 24 SHARP magnetic-field parameters for one active region — flux, shear, current density, gradient sharpness.</p>
+      </div>
+      <div class="primer-cell">
+        <span class="num">02</span>
+        <h3>The imbalance</h3>
+        <p>Large flares are rare — about 2% of real observations. Train partitions are synthetically rebalanced toward 50/50; test is left natural. That gap is most of this story.</p>
+      </div>
+      <div class="primer-cell">
+        <span class="num">03</span>
+        <h3>The scorecard</h3>
+        <p>Accuracy is meaningless at 2% prevalence. TSS (recall minus false-alarm rate) and HSS (skill over chance) are the field-standard metrics used throughout.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- MISSION LOG -->
+  <section>
+    <div class="section-head">
+      <div class="eyebrow">Mission log</div>
+      <h2>Eight entries, in order</h2>
+      <p>The chronological record — including the two bugs that mattered more than any architecture choice.</p>
+    </div>
+    <div class="log">
+
+      <div class="log-entry">
+        <div class="log-tag"><span class="n">01</span>baseline</div>
+        <div class="log-body">
+          <h3>Baseline established</h3>
+          <p>Loaded ~98k training / 331k test sequences. A naive Logistic Regression and HistGradientBoosting model, trained on hand-aggregated summary stats (mean / std / min / max / last per parameter), got the project off the ground.</p>
+        </div>
+      </div>
+
+      <div class="log-entry">
+        <div class="log-tag"><span class="n">02</span>deep learning</div>
+        <div class="log-body">
+          <h3>Raw sequences, real networks</h3>
+          <p>Built a 1D-CNN and an LSTM in PyTorch to learn directly from the raw (60, 24) time series instead of hand-aggregated stats — full control over an imbalance-aware loss.</p>
+        </div>
+      </div>
+
+      <div class="log-entry">
+        <div class="log-tag"><span class="n">03</span>incident</div>
+        <div class="log-body">
+          <h3>The machine went down</h3>
+          <p>First training run exhausted memory and hard-rebooted an 8GB M1. Loading five test partitions as float64, then casting to float32, spiked memory ~5.4GB with both copies alive at once. Fixed with a streaming loader, a memory guard, and an active watchdog process.</p>
+        </div>
+      </div>
+
+      <div class="log-entry">
+        <div class="log-tag"><span class="n">04</span>bug</div>
+        <div class="log-body">
+          <h3>A validation score that lied</h3>
+          <p>CNN validation TSS hit 0.90 — above even the published ceiling. Cause: validating on a held-out <em>train</em> partition let TimeGAN-synthesized near-duplicate sequences leak across folds.</p>
+          <div class="log-metric">val TSS <b>0.90</b> <span class="arrow">&rarr;</span> real test TSS <b>0.48</b></div>
+        </div>
+      </div>
+
+      <div class="log-entry">
+        <div class="log-tag"><span class="n">05</span>fix</div>
+        <div class="log-body">
+          <h3>Honest validation, honest number</h3>
+          <p>Rebuilt validation on an untouched, natural-distribution test partition instead. The score dropped to a defensible 0.51 — but training now visibly collapsed to predicting one class for stretches of several epochs.</p>
+        </div>
+      </div>
+
+      <div class="log-entry">
+        <div class="log-tag"><span class="n">06</span>bug</div>
+        <div class="log-body">
+          <h3>The real mismatch</h3>
+          <p>Train partitions are resampled to ~1:1; test is naturally ~52:1. A class weight applied to the already-balanced training data was a no-op. Undersampling positives to a ~10:1 ratio and applying a <em>matching</em> weight fixed the calibration.</p>
+          <div class="log-metric">CNN test TSS <b>0.51</b> <span class="arrow">&rarr;</span> <b>0.66</b></div>
+        </div>
+      </div>
+
+      <div class="log-entry">
+        <div class="log-tag"><span class="n">07</span>ensemble</div>
+        <div class="log-body">
+          <h3>A tree search, and a segfault</h3>
+          <p>Paired the CNN with a freshly-tuned gradient-boosted ensemble. The 40-iteration search crashed three times with SIGSEGV — the tree library's internal thread pool colliding with joblib's own parallelism on constrained hardware. Capping the thread count fixed it.</p>
+        </div>
+      </div>
+
+      <div class="log-entry">
+        <div class="log-tag"><span class="n">08</span>result</div>
+        <div class="log-body">
+          <h3>The tree wins</h3>
+          <p>The tuned gradient-boosted model alone reached 0.84 — past the CONTREX benchmark, using hand-aggregated features and a proper search, no raw sequence modeling required. Verified stable across all five held-out test partitions (0.82&ndash;0.87 individually).</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- MODEL COMPARISON CHART -->
+  <section>
+    <div class="section-head">
+      <div class="eyebrow">Results</div>
+      <h2>Six attempts, measured against the literature</h2>
+      <p>True Skill Statistic on the held-out test set, in the order each model was actually tried. Dashed lines mark published reference points.</p>
+    </div>
+
+    <div class="panel">
+      <div class="chart-grid">
+        <div class="ref-line" style="left: calc(172px + (100% - 172px) * 0.5667);"><span class="ref-label">Classical<br>baseline<br>0.51</span></div>
+        <div class="ref-line" style="left: calc(172px + (100% - 172px) * 0.7889);"><span class="ref-label">CONTREX<br>2024<br>0.71</span></div>
+        <div class="ref-line" style="left: calc(172px + (100% - 172px) * 0.9556);"><span class="ref-label">Tuned CNN<br>2026<br>0.86</span></div>
+
+        <div class="bar-label"><span class="fam" style="background:var(--blue)"></span>LSTM</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width: 39.4%;"></div>
+          <span class="bar-value">0.355</span>
+          <div class="bar-tip">LSTM, first attempt &middot; <b>TSS 0.355</b></div>
+        </div>
+
+        <div class="bar-label"><span class="fam" style="background:var(--blue)"></span>CNN (early)</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width: 53.2%;"></div>
+          <span class="bar-value">0.479</span>
+          <div class="bar-tip">CNN, leaky validation &middot; <b>TSS 0.479</b></div>
+        </div>
+
+        <div class="bar-label"><span class="fam" style="background:var(--blue)"></span>CNN (leak-fixed)</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width: 57.1%;"></div>
+          <span class="bar-value">0.514</span>
+          <div class="bar-tip">CNN, honest validation &middot; <b>TSS 0.514</b></div>
+        </div>
+
+        <div class="bar-label"><span class="fam" style="background:var(--blue)"></span>CNN (calibrated)</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width: 73.7%;"></div>
+          <span class="bar-value">0.663</span>
+          <div class="bar-tip">CNN, undersampled + pos_weight &middot; <b>TSS 0.663</b></div>
+        </div>
+
+        <div class="bar-label"><span class="fam" style="background:var(--blue)"></span>GBM + CNN ensemble</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width: 87.2%;"></div>
+          <span class="bar-value">0.785</span>
+          <div class="bar-tip">Averaged probabilities &middot; <b>TSS 0.785</b></div>
+        </div>
+
+        <div class="bar-label" style="color:var(--flare)"><span class="fam" style="background:var(--flare)"></span>GBM (final)</div>
+        <div class="bar-track">
+          <div class="bar-fill win" style="width: 93.2%;"></div>
+          <span class="bar-value win">0.839</span>
+          <div class="bar-tip">Tuned HistGradientBoosting &middot; <b>TSS 0.839</b></div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <div class="legend-item"><span class="legend-swatch" style="background:var(--blue)"></span>Deep learning attempts</div>
+        <div class="legend-item"><span class="legend-swatch" style="background:var(--flare)"></span>Classical ML (winner)</div>
+        <div class="legend-item"><span class="legend-swatch" style="border-left:1px dashed var(--ink-faint); width:0; height:12px;"></span>Published benchmark</div>
+      </div>
+      <p class="chart-note">Scale: 0&ndash;0.90 TSS. Ensemble underperforms the tuned tree alone — at this point in the project, the CNN wasn't strong enough to add value when averaged in.</p>
+    </div>
+  </section>
+
+  <!-- FEATURE IMPORTANCE -->
+  <section>
+    <div class="section-head">
+      <div class="eyebrow">Under the hood</div>
+      <h2>One feature carries most of the model</h2>
+      <p>Permutation importance on the winning model, computed on the held-out validation partition. <span class="mono" style="color:var(--flare)">R_VALUE_min</span> — the minimum unsigned flux near strong-gradient polarity inversion lines — outweighs every other feature roughly 7&times; over.</p>
+    </div>
+
+    <div class="panel">
+      <div class="fi-grid">
+        <div class="fi-label top">R_VALUE_min</div>
+        <div class="fi-bar-track"><div class="fi-bar-fill top" style="width:100%"></div><span class="fi-value top">0.1068</span></div>
+
+        <div class="fi-label">R_VALUE_max</div>
+        <div class="fi-bar-track"><div class="fi-bar-fill" style="width:13.7%"></div><span class="fi-value">0.0146</span></div>
+
+        <div class="fi-label">TOTFX_std</div>
+        <div class="fi-bar-track"><div class="fi-bar-fill" style="width:11.5%"></div><span class="fi-value">0.0123</span></div>
+
+        <div class="fi-label">SAVNCPP_max</div>
+        <div class="fi-bar-track"><div class="fi-bar-fill" style="width:8.6%"></div><span class="fi-value">0.0092</span></div>
+
+        <div class="fi-label">MEANGBZ_max</div>
+        <div class="fi-bar-track"><div class="fi-bar-fill" style="width:6.6%"></div><span class="fi-value">0.0070</span></div>
+
+        <div class="fi-label">TOTFY_std</div>
+        <div class="fi-bar-track"><div class="fi-bar-fill" style="width:5.5%"></div><span class="fi-value">0.0059</span></div>
+
+        <div class="fi-label">R_VALUE_last</div>
+        <div class="fi-bar-track"><div class="fi-bar-fill" style="width:5.5%"></div><span class="fi-value">0.0059</span></div>
+
+        <div class="fi-label">MEANALP_std</div>
+        <div class="fi-bar-track"><div class="fi-bar-fill" style="width:4.3%"></div><span class="fi-value">0.0046</span></div>
+      </div>
+      <p class="chart-note">R_VALUE as the dominant flare precursor is a well-established result in solar physics — the model rediscovered real domain signal rather than fitting noise.</p>
+    </div>
+  </section>
+
+  <!-- FIELD NOTES -->
+  <section>
+    <div class="section-head">
+      <div class="eyebrow">Field notes</div>
+      <h2>Two problems that had nothing to do with modeling</h2>
+    </div>
+    <div class="notes-grid">
+      <div class="note">
+        <span class="tag">Hardware</span>
+        <h3>Memory spike, hard reboot</h3>
+        <p>An 8GB machine can't hold a float64 copy and a float32 copy of a multi-gigabyte test set at once. The fix was structural, not clever: stream one partition at a time, check available memory before every heavy step, and run an active watchdog that kills the process before the OS has to.</p>
+      </div>
+      <div class="note">
+        <span class="tag">Runtime</span>
+        <h3>A segfault inside the tree library</h3>
+        <p><code class="mono">HistGradientBoostingClassifier</code>'s internal OpenMP binning step crashed under joblib's process-level parallelism on this machine — three times, always mid-search. <code class="mono">OMP_NUM_THREADS=1</code> combined with a modest <code class="mono">n_jobs</code> resolved it without giving up real parallelism.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="stack">
+      <span class="chip">PyTorch</span>
+      <span class="chip">scikit-learn</span>
+      <span class="chip">HistGradientBoosting</span>
+      <span class="chip">NumPy</span>
+      <span class="chip">SWAN-SF dataset</span>
+    </div>
+    <div class="credit">Solo project &middot; <a href="https://github.com/vichobug/solar-forecasting">github.com/vichobug/solar-forecasting</a></div>
+  </footer>
+
+</main>
+</body>
+</html>
