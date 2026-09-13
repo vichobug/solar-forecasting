@@ -288,6 +288,17 @@
     color: var(--ink-muted);
   }
   footer a { color: var(--ink-soft); }
+
+  /* ---------- references ---------- */
+
+  ol.refs {
+    margin: 18px 0 0;
+    padding: 0 0 0 20px;
+    font-size: 13.5px;
+    color: var(--ink-soft);
+  }
+  ol.refs li { margin-bottom: 10px; }
+  ol.refs li::marker { color: var(--ink-muted); }
 </style>
 </head>
 <body>
@@ -320,7 +331,7 @@
     <span class="label">Data</span>
     <h2>SWAN-SF: nine years of the Sun's magnetic field</h2>
     <p>An active region is a patch of the Sun's surface where the magnetic field is intensely tangled — visible as a sunspot. When that field is sheared past a breaking point, it can snap into a simpler configuration and release a flare: a burst of X-ray radiation ranked A through X by intensity, each class roughly ten times brighter than the last. Large flares (M and X class) are rare but consequential, capable of disrupting satellites, GPS, and power grids — which is also why flare datasets are heavily imbalanced by nature, not just by sampling choice.</p>
-    <p>SWAN-SF tracks this behavior via <b>SHARP</b> parameters — Space-weather HMI Active Region Patches, numeric summaries computed from NASA's Solar Dynamics Observatory magnetogram images for each active region. The full benchmark spans <b>4,000+ active regions and 10,000+ recorded flare events across roughly nine years</b> (May 2010–August 2018), split into five non-overlapping, time-segmented partitions so that no partition leaks information about another's time period. Of 51 available SHARP parameters, this project uses the 24 most commonly cited in the forecasting literature — total unsigned flux, current helicity, gradient sharpness around the polarity inversion line, and related measures of stored magnetic energy.</p>
+    <p>SWAN-SF tracks this behavior via <b>SHARP</b> parameters — Space-weather HMI Active Region Patches, numeric summaries computed from NASA's Solar Dynamics Observatory magnetogram images for each active region. The full benchmark spans <b>4,000+ active regions and 10,000+ recorded flare events across roughly nine years</b> (May 2010–August 2018), split into five non-overlapping, time-segmented partitions so that no partition leaks information about another's time period. Of the 51 available SHARP parameters, this project uses the same core set of 24 that recur across the forecasting literature: measures of total unsigned flux and stored magnetic energy, current helicity, and the sharpness of the field gradient near the polarity inversion line. That set traces back to Bobra &amp; Couvidat's original SHARP-based flare model,<sup><a href="#ref-bobra">4</a></sup> which found several of these same quantities separated flaring from quiet regions, and was later narrowed further by Liu et al., who showed a similar subset carried most of the predictive signal for large flares specifically.<sup><a href="#ref-liu">5</a></sup> Full definitions for all 24 parameters are in the project's <a href="https://github.com/vichobug/solar-forecasting/blob/main/docs/DATA_DICTIONARY.md">data dictionary</a>.</p>
     <p>Each sample is one active region's twelve-hour history (60 timesteps at 12-minute cadence) leading up to a forecast point, labeled by whether a large flare followed. Training partitions are imputed, normalized, and then <em>synthetically rebalanced</em> toward 50/50 (random undersampling, Tomek-link cleaning, and TimeGAN oversampling) with C-class events excluded; test partitions receive only imputation and normalization, left at the natural rate — around 2% positive. That gap between an artificially balanced training world and a naturally rare test world turns out to matter more than any architecture choice that follows.</p>
     <dl class="facts">
       <dt>Coverage</dt><dd>4,000+ active regions, 10,000+ flares, May 2010 &ndash; Aug 2018</dd>
@@ -334,11 +345,10 @@
   <section>
     <span class="label">Approach</span>
     <h2>How the model evolved</h2>
-    <p class="lede">A naive Logistic Regression and HistGradientBoosting model on hand-aggregated statistics (mean, standard deviation, min, max, and final value per parameter) established a first baseline. From there, a 1D-CNN and an LSTM were built in PyTorch to learn directly from the raw sequences instead of the aggregated view.</p>
-    <p>The first training run exhausted memory and forced a hard reboot on an 8GB machine: loading five test partitions as 64-bit floats and then casting to 32-bit briefly held both copies at once, a spike of roughly 5.4GB. The fix was structural rather than clever — stream one partition at a time, check available memory before each heavy step, and run a watchdog that terminates the process before the operating system has to.</p>
-    <p>A more consequential problem surfaced once training was stable: validation TSS reached <b>0.90</b>, above even the best published result for this dataset. The cause was methodological, not architectural — the validation split was a held-out fold of the <em>training</em> data, which had been synthetically rebalanced with TimeGAN, so near-duplicate synthetic sequences were leaking across folds. Validating instead on an untouched, naturally-imbalanced slice of the test set brought the number down to a defensible <b>0.51</b> — and exposed a second issue: predictions collapsed to a single class for long stretches of training.</p>
-    <p>That collapse traced to a distribution mismatch: training data is resampled to roughly 1:1, while the real class ratio is close to 52:1. A loss weight applied to the already-balanced training data did nothing. Undersampling the positive class to a 10:1 ratio and applying a loss weight that matched <em>that</em> ratio raised CNN test TSS to <b>0.66</b>.</p>
-    <p>Pairing that CNN with a newly tuned gradient-boosted ensemble was the next step. The hyperparameter search crashed three times with a segmentation fault before the cause was found — the boosting library's internal thread pool colliding with the search's own parallelism on constrained hardware — resolved by capping the thread count. On its own, the tuned ensemble reached a test TSS of <b>0.84</b>, ahead of the ensemble and every network attempted, and stable within a narrow band (0.82&ndash;0.87) across every held-out partition.</p>
+    <p class="lede">A simple first pass — a couple of standard classifiers trained on hand-summarized statistics (the mean, spread, min, max, and final value of each parameter) — gave a rough sense of what was achievable. From there, two neural networks built to read the raw twelve-hour sequences directly, a 1D-CNN and an LSTM, were meant to do better by using more of the available information.</p>
+    <p>They didn't, at first — and the reason turned out to matter more than the models themselves. Early on, validation scores reached <b>0.90</b>, higher than any published result on this dataset, which was itself the tell that something was off. The validation set was being drawn from the same synthetically rebalanced training data the model had learned from, so near-duplicate synthetic examples were leaking between the two. Re-checking performance on an untouched, naturally rare slice of test data brought the honest number down to <b>0.51</b> — and surfaced a second problem: the model would sometimes stop predicting the rare class at all for long stretches of training.</p>
+    <p>That turned out to be a mismatch between the world the model trained on and the world it was tested on: training data had been rebalanced to roughly even odds, while real flares stay rare, closer to one in fifty. Once the training mix and the loss function were brought back into agreement with each other, the CNN's test score rose to <b>0.66</b>.</p>
+    <p>The next step paired that network with a carefully tuned gradient-boosted tree ensemble. On its own, the tuned ensemble turned out to be the strongest model tried — a test score of <b>0.84</b>, ahead of the network it was paired with and everything before it, and consistent across every held-out slice of the data (0.82&ndash;0.87).</p>
   </section>
 
   <section>
@@ -347,9 +357,9 @@
     <p>True Skill Statistic on the held-out test set, in the order each model was tried. Dashed lines mark published reference points — shown for context, not as a like-for-like comparison, since they use different data splits.</p>
 
     <div class="chart">
-      <div class="chart-ref" style="left: calc(148px + (100% - 148px) * 0.5667);"><span class="chart-ref-label">Classical<br>baseline<br>0.51</span></div>
-      <div class="chart-ref" style="left: calc(148px + (100% - 148px) * 0.7889);"><span class="chart-ref-label">CONTREX<br>2024<br>0.71</span></div>
-      <div class="chart-ref" style="left: calc(148px + (100% - 148px) * 0.9556);"><span class="chart-ref-label">Tuned CNN<br>2026<br>0.86</span></div>
+      <div class="chart-ref" style="left: calc(148px + (100% - 148px) * 0.5667);"><span class="chart-ref-label">Classical<br>baseline<br>0.51 <sup><a href="#ref-classical">1</a></sup></span></div>
+      <div class="chart-ref" style="left: calc(148px + (100% - 148px) * 0.7889);"><span class="chart-ref-label">CONTREX<br>2024<br>0.71 <sup><a href="#ref-contrex">2</a></sup></span></div>
+      <div class="chart-ref" style="left: calc(148px + (100% - 148px) * 0.9556);"><span class="chart-ref-label">Tuned CNN<br>2026<br>0.86 <sup><a href="#ref-cnn">3</a></sup></span></div>
 
       <div class="chart-label">LSTM</div>
       <div class="chart-row" title="LSTM, first attempt — TSS 0.355"><div class="chart-fill" style="width:39.4%"></div><span class="chart-value">0.355</span></div>
@@ -414,17 +424,17 @@
           </tr>
           <tr class="divider"><td colspan="3">Published, for reference</td></tr>
           <tr class="ref">
-            <td>Classical ML baselines</td>
+            <td>Classical ML baselines <sup><a href="#ref-classical">1</a></sup></td>
             <td class="num">0.51<div class="bar"><span style="width:56.7%"></span></div></td>
             <td class="num">0.38</td>
           </tr>
           <tr class="ref">
-            <td>CONTREX, contrastive (2024)</td>
+            <td>CONTREX, contrastive (2024) <sup><a href="#ref-contrex">2</a></sup></td>
             <td class="num">0.71<div class="bar"><span style="width:78.9%"></span></div></td>
             <td class="num">&mdash;</td>
           </tr>
           <tr class="ref">
-            <td>Tuned CNN (2026)</td>
+            <td>Tuned CNN (2026) <sup><a href="#ref-cnn">3</a></sup></td>
             <td class="num">0.86<div class="bar"><span style="width:95.6%"></span></div></td>
             <td class="num">&mdash;</td>
           </tr>
@@ -446,7 +456,19 @@
       <li><code>MEANGBZ_max</code><span class="v">0.0070</span></li>
       <li><code>TOTFY_std</code><span class="v">0.0059</span></li>
     </ol>
-    <p style="margin-top:16px;"><code>R_VALUE</code> — unsigned flux near strong-gradient polarity inversion lines — outweighs every other feature roughly sevenfold. That it dominates is not a surprise specific to this pipeline: R_VALUE is an established flare precursor in the solar-physics literature, which is a better sign than a higher score alone would have been.</p>
+    <p style="margin-top:16px;"><code>R_VALUE</code> — unsigned flux near strong-gradient polarity inversion lines — outweighs every other feature roughly sevenfold. That it dominates is not a surprise specific to this pipeline: R_VALUE is a well-established flare precursor in the solar-physics literature,<sup><a href="#ref-liu">5</a></sup> which is a better sign than a higher score alone would have been.</p>
+  </section>
+
+  <section>
+    <span class="label">References</span>
+    <h2>Sources</h2>
+    <ol class="refs">
+      <li id="ref-classical">Ahmadzadeh, A., Aydin, B., Georgoulis, M. K., Kempton, D. J., Mahajan, S. S., &amp; Angryk, R. A. (2021). "How to Train Your Flare Prediction Model: Revisiting Robust Sampling of Rare Events." <em>The Astrophysical Journal Supplement Series</em>, 254, 23. <a href="https://arxiv.org/abs/2103.07542">arXiv:2103.07542</a>.</li>
+      <li id="ref-contrex">Vural, O., Hamdi, S. M., &amp; Boubrahimi, S. F. (2024). "Contrastive Representation Learning for Predicting Solar Flares from Extremely Imbalanced Multivariate Time Series Data." ICMLA 2024. <a href="https://arxiv.org/abs/2410.00312">arXiv:2410.00312</a>.</li>
+      <li id="ref-cnn">"Predicting Major Solar Flares Using Convolutional Neural Networks and Multivariate Magnetic Field Time-Series Data." <em>Solar Physics</em> (2026). <a href="https://doi.org/10.1007/s11207-026-02612-6">doi:10.1007/s11207-026-02612-6</a>.</li>
+      <li id="ref-bobra">Bobra, M. G., &amp; Couvidat, S. (2015). "Solar Flare Prediction Using SDO/HMI Vector Magnetic Field Data with a Machine-Learning Algorithm." <em>The Astrophysical Journal</em>, 798, 135. <a href="https://doi.org/10.1088/0004-637X/798/2/135">doi:10.1088/0004-637X/798/2/135</a>.</li>
+      <li id="ref-liu">Liu, C., Deng, N., Wang, J. T. L., &amp; Wang, H. (2017). "Predicting Solar Flares Using SDO/HMI Vector Magnetic Data Products and the Random Forest Algorithm." <em>The Astrophysical Journal</em>, 843, 104. <a href="https://doi.org/10.3847/1538-4357/aa789b">doi:10.3847/1538-4357/aa789b</a>.</li>
+    </ol>
   </section>
 
   <footer>
