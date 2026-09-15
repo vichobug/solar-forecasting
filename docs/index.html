@@ -331,10 +331,10 @@
     <span class="label">Data</span>
     <h2>SWAN-SF: nine years of the Sun's magnetic field</h2>
     <p>An active region is a patch of the Sun's surface where the magnetic field is intensely tangled — visible as a sunspot. When that field is sheared past a breaking point, it can snap into a simpler configuration and release a flare: a burst of X-ray radiation ranked A through X by intensity, each class roughly ten times brighter than the last. Large flares (M and X class) are rare but consequential, capable of disrupting satellites, GPS, and power grids — which is also why flare datasets are heavily imbalanced by nature, not just by sampling choice.</p>
-    <p>SWAN-SF tracks this behavior via <b>SHARP</b> parameters — Space-weather HMI Active Region Patches, numeric summaries computed from NASA's Solar Dynamics Observatory magnetogram images for each active region. The full benchmark spans <b>4,000+ active regions and 10,000+ recorded flare events across roughly nine years</b> (May 2010–August 2018), split into five non-overlapping, time-segmented partitions so that no partition leaks information about another's time period. Of the 51 available SHARP parameters, this project uses the same core set of 24 that recur across the forecasting literature: measures of total unsigned flux and stored magnetic energy, current helicity, and the sharpness of the field gradient near the polarity inversion line. That set traces back to Bobra &amp; Couvidat's original SHARP-based flare model,<sup><a href="#ref-bobra">4</a></sup> which found several of these same quantities separated flaring from quiet regions, and was later narrowed further by Liu et al., who showed a similar subset carried most of the predictive signal for large flares specifically.<sup><a href="#ref-liu">5</a></sup> Full definitions for all 24 parameters are in the project's <a href="https://github.com/vichobug/solar-forecasting/blob/main/docs/DATA_DICTIONARY.md">data dictionary</a>.</p>
+    <p>SWAN-SF tracks this behavior via <b>SHARP</b> parameters — Space-weather HMI Active Region Patches, numeric summaries computed from NASA's Solar Dynamics Observatory magnetogram images for each active region. The full benchmark spans <b>4,000+ active regions and 10,000+ recorded flare events across roughly nine years</b> (May 2010–December 2018),<sup><a href="#ref-swansf">6</a></sup> split into five non-overlapping, time-segmented partitions so that no partition leaks information about another's time period. Of the 51 available SHARP parameters, this project uses the same core set of 24 that recur across the forecasting literature: measures of total unsigned flux and stored magnetic energy, current helicity, and the sharpness of the field gradient near the polarity inversion line. That set traces back to Bobra &amp; Couvidat's original SHARP-based flare model,<sup><a href="#ref-bobra">4</a></sup> which found several of these same quantities separated flaring from quiet regions, and was later narrowed further by Liu et al., who showed a similar subset carried most of the predictive signal for large flares specifically.<sup><a href="#ref-liu">5</a></sup> Full definitions for all 24 parameters are in the project's <a href="https://github.com/vichobug/solar-forecasting/blob/main/docs/DATA_DICTIONARY.md">data dictionary</a>.</p>
     <p>Each sample is one active region's twelve-hour history (60 timesteps at 12-minute cadence) leading up to a forecast point, labeled by whether a large flare followed. Training partitions are imputed, normalized, and then <em>synthetically rebalanced</em> toward 50/50 (random undersampling, Tomek-link cleaning, and TimeGAN oversampling) with C-class events excluded; test partitions receive only imputation and normalization, left at the natural rate — around 2% positive. That gap between an artificially balanced training world and a naturally rare test world turns out to matter more than any architecture choice that follows.</p>
     <dl class="facts">
-      <dt>Coverage</dt><dd>4,000+ active regions, 10,000+ flares, May 2010 &ndash; Aug 2018</dd>
+      <dt>Coverage</dt><dd>4,000+ active regions, 10,000+ flares, May 2010 &ndash; Dec 2018</dd>
       <dt>Samples</dt><dd>~98k train &middot; ~331k test, across 5 time-segmented partitions</dd>
       <dt>Features</dt><dd>24 of 51 available SHARP parameters &mdash; flux, shear, current, gradient</dd>
       <dt>Positive rate</dt><dd>~50% in train (resampled) &middot; ~2% in test (natural)</dd>
@@ -357,7 +357,7 @@
     <p>True Skill Statistic on the held-out test set, in the order each model was tried. Dashed lines mark published reference points — shown for context, not as a like-for-like comparison, since they use different data splits.</p>
 
     <div class="chart">
-      <div class="chart-ref" style="left: calc(148px + (100% - 148px) * 0.5667);"><span class="chart-ref-label">Classical<br>baseline<br>0.51 <sup><a href="#ref-classical">1</a></sup></span></div>
+      <div class="chart-ref" style="left: calc(148px + (100% - 148px) * 0.6667);"><span class="chart-ref-label">Classical<br>baseline<br>0.60 <sup><a href="#ref-classical">1</a></sup></span></div>
       <div class="chart-ref" style="left: calc(148px + (100% - 148px) * 0.7889);"><span class="chart-ref-label">CONTREX<br>2024<br>0.71 <sup><a href="#ref-contrex">2</a></sup></span></div>
       <div class="chart-ref" style="left: calc(148px + (100% - 148px) * 0.9556);"><span class="chart-ref-label">Tuned CNN<br>2026<br>0.86 <sup><a href="#ref-cnn">3</a></sup></span></div>
 
@@ -425,8 +425,8 @@
           <tr class="divider"><td colspan="3">Published, for reference</td></tr>
           <tr class="ref">
             <td>Classical ML baselines <sup><a href="#ref-classical">1</a></sup></td>
-            <td class="num">0.51<div class="bar"><span style="width:56.7%"></span></div></td>
-            <td class="num">0.38</td>
+            <td class="num">0.60<div class="bar"><span style="width:66.7%"></span></div></td>
+            <td class="num">&mdash;</td>
           </tr>
           <tr class="ref">
             <td>CONTREX, contrastive (2024) <sup><a href="#ref-contrex">2</a></sup></td>
@@ -468,6 +468,7 @@
       <li id="ref-cnn">"Predicting Major Solar Flares Using Convolutional Neural Networks and Multivariate Magnetic Field Time-Series Data." <em>Solar Physics</em> (2026). <a href="https://doi.org/10.1007/s11207-026-02612-6">doi:10.1007/s11207-026-02612-6</a>.</li>
       <li id="ref-bobra">Bobra, M. G., &amp; Couvidat, S. (2015). "Solar Flare Prediction Using SDO/HMI Vector Magnetic Field Data with a Machine-Learning Algorithm." <em>The Astrophysical Journal</em>, 798, 135. <a href="https://doi.org/10.1088/0004-637X/798/2/135">doi:10.1088/0004-637X/798/2/135</a>.</li>
       <li id="ref-liu">Liu, C., Deng, N., Wang, J. T. L., &amp; Wang, H. (2017). "Predicting Solar Flares Using SDO/HMI Vector Magnetic Data Products and the Random Forest Algorithm." <em>The Astrophysical Journal</em>, 843, 104. <a href="https://doi.org/10.3847/1538-4357/aa789b">doi:10.3847/1538-4357/aa789b</a>.</li>
+      <li id="ref-swansf">Angryk, R. A., Martens, P. C., Aydin, B., et al. (2020). "Multivariate Time Series Dataset for Space Weather Data Analytics." <em>Scientific Data</em>, 7, 227. <a href="https://doi.org/10.1038/s41597-020-0548-x">doi:10.1038/s41597-020-0548-x</a>.</li>
     </ol>
   </section>
 

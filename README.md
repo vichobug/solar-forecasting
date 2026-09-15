@@ -31,7 +31,7 @@ This is a **multivariate time series classification** problem: given the recent 
 
 ## Dataset — SWAN-SF
 
-Multivariate time series covering 4,000+ active regions across 9+ years of SDO data, 51 flare-predictive parameters (24 commonly used), 10,000+ flare reports, split into 5 non-overlapping time-segmented partitions (~May 2010–Aug 2018) for reproducible train/test splits.
+Multivariate time series covering 4,000+ active regions across 9+ years of SDO data, 51 flare-predictive parameters (24 commonly used), 10,000+ flare reports, split into 5 non-overlapping time-segmented partitions (~May 2010–Dec 2018) for reproducible train/test splits.
 
 ### Access
 - **Raw source**: Harvard Dataverse — doi:10.7910/DVN/EBCFKM. Ground-truth CSVs but needs preprocessing (imputation, normalization, imbalance handling).
@@ -104,11 +104,11 @@ Accuracy is close to meaningless given extreme class imbalance. Use:
 
 | Approach | TSS | Notes |
 |---|---|---|
-| Classical ML baselines (SVM, LSTM, MiniRocket, robust sampling study) | ~0.51 | HSS ~0.38 — solid mid-tier reference point |
+| Classical ML baselines (SVM, LSTM, MiniRocket, robust sampling study) | ~0.60 | not reported for this experiment — mid-tier reference point |
 | CONTREX (contrastive representation learning, 2024) | ~0.71 | 0.73 accuracy, 0.85 ROC AUC |
 | Lightweight tuned CNN (2026) | ~0.86 | Current high-water mark found; very recent |
 
-Progression (0.51 → 0.71 → 0.86) comes mostly from representation/architecture choices (contrastive learning, tuned CNNs, attention-based fusion), not more data — a good sign for a solo effort.
+Progression (0.60 → 0.71 → 0.86) comes mostly from representation/architecture choices (contrastive learning, tuned CNNs, attention-based fusion), not more data — a good sign for a solo effort.
 
 ## Project phases
 
